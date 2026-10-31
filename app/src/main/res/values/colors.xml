@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动屏品牌底色（浅色/深色一致） -->
+    <color name="brand_splash">#0F6B5C</color>
+    <!-- 应用窗口底色，避免冷启动白闪 -->
+    <color name="app_background">#FFFBFE</color>
+</resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动主题：SplashScreen API 接管，结束后切到 Theme.Eori -->
+    <style name="Theme.Eori.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/brand_splash</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.Eori</item>
+    </style>
+
+    <style name="Theme.Eori" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

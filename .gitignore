@@ -1,0 +1,34 @@
+# ---------- 构建产物 ----------
+build/
+app/build/
+.gradle/
+captures/
+*.hprof
+*.apk
+*.aab
+
+# ---------- 本机缓存（体积大，可重新生成） ----------
+.gradle-home/
+.robolectric/
+.android-home/
+.tmp/
+.kotlin/
+
+# ---------- 本地配置与密钥（绝不提交） ----------
+local.properties
+keystore.properties
+keystore/
+*.jks
+*.keystore
+
+# ---------- 交付物：APK 请走 GitHub Releases ----------
+dist/
+
+*.zip
+*.tar.gz
+
+# ---------- IDE / 系统 ----------
+.idea/
+*.iml
+.DS_Store
+Thumbs.db

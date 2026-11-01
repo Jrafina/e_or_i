@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ddl.eori.data.local.DailySum
 import com.ddl.eori.data.local.PeriodTotals
+import com.ddl.eori.data.local.TransactionEntity
 import com.ddl.eori.data.repo.TransactionRepository
 import com.ddl.eori.util.Dates
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -28,6 +29,10 @@ data class StatsUiState(
     val daysInMonth: Int = 30,
     val isCurrentMonth: Boolean = true,
     val loading: Boolean = true,
+    /** 本月消费 Top10（金额从大到小） */
+    val topExpenses: List<TransactionEntity> = emptyList(),
+    /** 每条 Top 账单对应的账户名（含已删除账户的兜底名） */
+    val accountNames: Map<Long, String> = emptyMap(),
 ) {
     /** 月当前日支出 = 本月净支出 ÷ 本月已过天数（至少为 1） */
     val dailyAverageCents: Long
@@ -51,7 +56,8 @@ class StatsViewModel(
             combine(
                 txRepo.observeTotals(range.first, range.last + 1),
                 txRepo.observeDaily(range.first, range.last + 1, tzOffsetMinutes),
-            ) { totals, daily ->
+                txRepo.observeTopExpenses(range.first, range.last + 1, 10),
+            ) { totals, daily, topExpenses ->
                 val totalDays = Dates.daysInMonth(year, month, zone)
                 val byDay = daily.associateBy { it.day }
                 val points = (1..totalDays).map { d ->
@@ -71,6 +77,7 @@ class StatsViewModel(
                     daysInMonth = totalDays,
                     isCurrentMonth = year == currentYear && month == currentMonth,
                     loading = false,
+                    topExpenses = topExpenses,
                 )
             }
         }

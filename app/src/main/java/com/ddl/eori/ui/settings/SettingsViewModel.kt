@@ -6,6 +6,8 @@ import com.ddl.eori.data.remote.AiClient
 import com.ddl.eori.data.remote.asParseError
 import com.ddl.eori.data.settings.AiConfig
 import com.ddl.eori.data.settings.SettingsRepository
+import com.ddl.eori.data.sync.SyncConfig
+import com.ddl.eori.data.sync.SyncDirection
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +33,17 @@ data class SettingsUiState(
     val saved: Boolean = false,
     val message: String? = null,
     val darkMode: Boolean = false,
+    // ---- 云同步 ----
+    val syncEndpoint: String = "",
+    val syncToken: String = "",
+    val syncTokenVisible: Boolean = false,
+    val syncRunning: Boolean = false,
+    /** 最近一次成功同步的时间，null 表示从未同步 */
+    val lastSyncAt: Long? = null,
+    val lastSyncSummary: String? = null,
+    val syncError: String? = null,
+    /** 地址是否满足 https 要求 */
+    val syncSecure: Boolean = true,
 ) {
     val models: List<String>
         get() = (verifyState as? VerifyState.Success)?.models.orEmpty()
@@ -42,6 +55,7 @@ data class SettingsUiState(
 class SettingsViewModel(
     private val settingsRepo: SettingsRepository,
     private val aiClient: AiClient,
+    private val syncEngine: com.ddl.eori.data.sync.SyncEngine,
 ) : ViewModel() {
 
     private val _form = MutableStateFlow(FormState())
@@ -54,17 +68,26 @@ class SettingsViewModel(
         val model: String = "",
         val keyVisible: Boolean = false,
         val verifyState: VerifyState = VerifyState.Idle,
+        val syncEndpoint: String = "",
+        val syncToken: String = "",
+        val syncTokenVisible: Boolean = false,
     )
+
+    private val _syncRunning = MutableStateFlow(false)
+    private val _syncError = MutableStateFlow<String?>(null)
 
     init {
         // 首次加载已保存配置（只执行一次，避免覆盖用户正在编辑的内容）
         viewModelScope.launch {
             val config = settingsRepo.aiConfig.first()
+            val sync = settingsRepo.syncPrefs.first()
             if (!loaded) {
                 _form.value = FormState(
                     baseUrl = config.baseUrl,
                     apiKey = config.apiKey,
                     model = config.model,
+                    syncEndpoint = sync.endpoint,
+                    syncToken = sync.token,
                 )
                 loaded = true
             }
@@ -75,15 +98,32 @@ class SettingsViewModel(
         _form,
         _message,
         settingsRepo.uiPrefs,
-    ) { form, message, prefs ->
+        settingsRepo.syncPrefs,
+        _syncRunning,
+        _syncError,
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        val form = values[0] as FormState
+        val prefs = values[2] as com.ddl.eori.data.settings.UiPrefs
+        val sync = values[3] as com.ddl.eori.data.settings.SyncPrefs
         SettingsUiState(
             baseUrl = form.baseUrl,
             apiKey = form.apiKey,
             model = form.model,
             keyVisible = form.keyVisible,
             verifyState = form.verifyState,
-            message = message,
+            message = values[1] as String?,
             darkMode = prefs.darkMode,
+            syncEndpoint = form.syncEndpoint,
+            syncToken = form.syncToken,
+            syncTokenVisible = form.syncTokenVisible,
+            syncRunning = values[4] as Boolean,
+            lastSyncAt = sync.lastSyncAt,
+            lastSyncSummary = sync.lastSummary,
+            syncError = values[5] as String?,
+            syncSecure = SyncConfig.normalize(form.syncEndpoint).let {
+                it.isBlank() || SyncConfig(endpoint = it).isSecureEndpoint
+            },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
@@ -189,6 +229,91 @@ class SettingsViewModel(
                 _message.value = "保存失败：${it.message}"
             }
         }
+    }
+
+    // ------------------------------------------------------------------ 云同步
+
+    fun onSyncEndpointChange(value: String) {
+        _form.value = _form.value.copy(syncEndpoint = value.trim())
+        _syncError.value = null
+    }
+
+    fun onSyncTokenChange(value: String) {
+        _form.value = _form.value.copy(syncToken = value.trim())
+        _syncError.value = null
+    }
+
+    fun toggleSyncTokenVisible() {
+        _form.value = _form.value.copy(syncTokenVisible = !_form.value.syncTokenVisible)
+    }
+
+    /** 校验连接（只是一次 meta 请求，不改动任何数据） */
+    fun testSyncConnection() {
+        val config = currentSyncConfig() ?: return
+        viewModelScope.launch {
+            _syncRunning.value = true
+            _syncError.value = null
+            runCatching {
+                val (meta, localLast) = syncEngine.check(config)
+                settingsRepo.saveSyncConfig(config.endpoint, config.token)
+                "连接成功：云端 ${meta.transactionCount} 笔账单 / ${meta.accountCount} 个账户" to
+                    (if (meta.lastUpdatedAt >= localLast) "云端较新" else "本地较新")
+            }.onSuccess { (text, hint) ->
+                _message.value = "$text（$hint）"
+            }.onFailure {
+                _syncError.value = it.message ?: "连接失败"
+            }
+            _syncRunning.value = false
+        }
+    }
+
+    /**
+     * 手动同步：先比较两端最后更新时间戳决定方向，再只传增量。
+     */
+    fun syncNow() {
+        if (_syncRunning.value) return
+        val config = currentSyncConfig() ?: return
+        viewModelScope.launch {
+            _syncRunning.value = true
+            _syncError.value = null
+            runCatching {
+                // 先保存配置，确保下次打开还在
+                settingsRepo.saveSyncConfig(config.endpoint, config.token)
+                syncEngine.run(config)
+            }.onSuccess { outcome ->
+                val direction = when (outcome.direction) {
+                    SyncDirection.PULL -> "已从云端拉取"
+                    SyncDirection.PUSH -> "已上传到云端"
+                    SyncDirection.UP_TO_DATE -> "已是最新"
+                }
+                val detail = if (outcome.direction == SyncDirection.UP_TO_DATE) {
+                    "两端数据一致，无需传输"
+                } else {
+                    "账户 ${outcome.accountsSynced} 个 · 账单 ${outcome.transactionsSynced} 笔"
+                }
+                val summary = "$direction · $detail"
+                settingsRepo.recordSync(outcome.finishedAt, summary)
+                _message.value = "同步完成：$summary"
+            }.onFailure {
+                _syncError.value = it.message ?: "同步失败"
+            }
+            _syncRunning.value = false
+        }
+    }
+
+    private fun currentSyncConfig(): SyncConfig? {
+        val form = _form.value
+        val endpoint = SyncConfig.normalize(form.syncEndpoint)
+        if (endpoint.isBlank() || form.syncToken.isBlank()) {
+            _syncError.value = "请先填写同步地址和同步密钥"
+            return null
+        }
+        val config = SyncConfig(endpoint, form.syncToken)
+        if (!config.isSecureEndpoint) {
+            _syncError.value = "同步地址必须使用 https://（明文会泄露账单与密钥）"
+            return null
+        }
+        return config
     }
 
     fun setDarkMode(enabled: Boolean) {

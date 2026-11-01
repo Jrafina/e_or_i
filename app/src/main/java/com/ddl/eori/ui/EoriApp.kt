@@ -145,6 +145,9 @@ fun EoriApp() {
                 Destination.ACCOUNTS -> AccountsScreen(
                     state = accountsState,
                     onCreate = accountsViewModel::startCreate,
+                    onOpenAccount = accountsViewModel::openDetail,
+                    onCloseDetail = accountsViewModel::closeDetail,
+                    onDeleteTransaction = accountsViewModel::deleteTransaction,
                     onEdit = accountsViewModel::startEdit,
                     onRequestDelete = accountsViewModel::requestDelete,
                     onEditorChange = accountsViewModel::updateEditor,
@@ -162,6 +165,11 @@ fun EoriApp() {
                     onVerify = settingsViewModel::verify,
                     onSave = settingsViewModel::save,
                     onDarkModeChange = settingsViewModel::setDarkMode,
+                    onSyncEndpointChange = settingsViewModel::onSyncEndpointChange,
+                    onSyncTokenChange = settingsViewModel::onSyncTokenChange,
+                    onToggleSyncTokenVisible = settingsViewModel::toggleSyncTokenVisible,
+                    onSyncTest = settingsViewModel::testSyncConnection,
+                    onSyncNow = settingsViewModel::syncNow,
                 )
             }
         }

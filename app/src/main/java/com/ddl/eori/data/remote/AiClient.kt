@@ -113,6 +113,8 @@ class AiClient(
         model: String,
         now: Long = System.currentTimeMillis(),
         zone: TimeZone = TimeZone.getDefault(),
+        /** 用户已有账户名列表：交给模型做精确匹配，避免“卡2”被记到“卡1” */
+        accountNames: List<String> = emptyList(),
     ): Result<AiParseResult> = withContext(Dispatchers.IO) {
         runCatching {
             if (baseUrl.isBlank() || apiKey.isBlank() || model.isBlank()) {
@@ -120,7 +122,7 @@ class AiClient(
             }
             val nowText = formatIsoLocal(now, zone)
             val weekday = weekdayName(now, zone)
-            val body = buildChatBody(model, rawInput, nowText, weekday)
+            val body = buildChatBody(model, rawInput, nowText, weekday, accountNames)
 
             val request = Request.Builder()
                 .url(ApiUrls.chatCompletionsUrl(baseUrl))
@@ -145,7 +147,13 @@ class AiClient(
 
     // ---------------------------------------------------------------- 内部实现
 
-    private fun buildChatBody(model: String, rawInput: String, nowText: String, weekday: String): String {
+    private fun buildChatBody(
+        model: String,
+        rawInput: String,
+        nowText: String,
+        weekday: String,
+        accountNames: List<String>,
+    ): String {
         val payload = buildJsonObject {
             put("model", model)
             put("temperature", 0.1)
@@ -155,7 +163,7 @@ class AiClient(
             putJsonArray("messages") {
                 add(buildJsonObject {
                     put("role", "system")
-                    put("content", Prompts.systemPrompt(nowText, weekday))
+                    put("content", Prompts.systemPrompt(nowText, weekday, accountNames))
                 })
                 add(buildJsonObject {
                     put("role", "user")

@@ -11,6 +11,7 @@ import com.ddl.eori.data.local.TransactionDao
 import com.ddl.eori.data.local.TransactionEntity
 import com.ddl.eori.data.local.TxType
 import kotlinx.coroutines.flow.Flow
+import java.util.UUID
 
 /**
  * 账户仓库。
@@ -34,13 +35,25 @@ class AccountRepository(
         val cleanName = name.trim()
         require(cleanName.isNotEmpty()) { "账户名不能为空" }
         return accountDao.insert(
-            AccountEntity(name = cleanName, type = type, balanceCents = balanceCents)
+            AccountEntity(
+                name = cleanName,
+                type = type,
+                balanceCents = balanceCents,
+                uid = UUID.randomUUID().toString(),
+                updatedAt = System.currentTimeMillis(),
+            )
         )
     }
 
     suspend fun update(account: AccountEntity) {
         require(account.name.isNotBlank()) { "账户名不能为空" }
-        accountDao.update(account.copy(name = account.name.trim()))
+        accountDao.update(
+            account.copy(
+                name = account.name.trim(),
+                uid = account.uid.ifBlank { UUID.randomUUID().toString() },
+                updatedAt = System.currentTimeMillis(),
+            )
+        )
     }
 
     /** 删除账户，账单保留（accountId 变为悬空引用） */
@@ -67,7 +80,14 @@ class AccountRepository(
             "银行卡" to AccountType.BANK,
             "现金" to AccountType.CASH,
         ).forEach { (name, type) ->
-            accountDao.insert(AccountEntity(name = name, type = type))
+            accountDao.insert(
+                AccountEntity(
+                    name = name,
+                    type = type,
+                    uid = UUID.randomUUID().toString(),
+                    updatedAt = System.currentTimeMillis(),
+                )
+            )
         }
     }
 }
@@ -93,6 +113,15 @@ class TransactionRepository(
     fun observeDaily(from: Long, to: Long, tzOffsetMinutes: Int) =
         transactionDao.observeDaily(from, to, tzOffsetMinutes)
 
+    fun observeByAccount(accountId: Long, limit: Int = 300): Flow<List<TransactionEntity>> =
+        transactionDao.observeByAccount(accountId, limit)
+
+    fun observeTopExpenses(from: Long, to: Long, limit: Int = 10): Flow<List<TransactionEntity>> =
+        transactionDao.observeTopExpenses(from, to, limit)
+
+    fun observeTotalsByAccount(accountId: Long): Flow<PeriodTotals> =
+        transactionDao.observeTotalsByAccount(accountId)
+
     suspend fun get(id: Long): TransactionEntity? = transactionDao.getById(id)
 
     suspend fun add(
@@ -114,32 +143,43 @@ class TransactionRepository(
                     note = note.trim(),
                     rawInput = rawInput.trim(),
                     occurredAt = occurredAt,
+                    uid = UUID.randomUUID().toString(),
+                    updatedAt = System.currentTimeMillis(),
                 )
             )
             if (account != null) {
-                accountDao.adjustBalance(account.id, signedDelta(amountCents, type))
+                accountDao.adjustBalance(account.id, signedDelta(amountCents, type), System.currentTimeMillis())
             }
             id
         }
     }
 
-    /** 编辑账单：先撤销旧账单对余额的影响，再应用新值（含换账户） */
+    /** 编辑账单：先撤销旧账单对余额的影响，再应用新值（含换账户），并刷新 updatedAt 供同步 */
     suspend fun update(tx: TransactionEntity) {
         require(tx.amountCents > 0) { "金额必须大于 0" }
         db.withTransaction {
             val old = transactionDao.getById(tx.id) ?: return@withTransaction
-            old.accountId?.let { accountDao.adjustBalance(it, -signedDelta(old.amountCents, old.type)) }
-            transactionDao.update(tx)
-            tx.accountId?.let { accountDao.adjustBalance(it, signedDelta(tx.amountCents, tx.type)) }
+            old.accountId?.let { accountDao.adjustBalance(it, -signedDelta(old.amountCents, old.type), System.currentTimeMillis()) }
+            transactionDao.update(
+                tx.copy(
+                    uid = old.uid.ifBlank { UUID.randomUUID().toString() },
+                    updatedAt = System.currentTimeMillis(),
+                )
+            )
+            tx.accountId?.let { accountDao.adjustBalance(it, signedDelta(tx.amountCents, tx.type), System.currentTimeMillis()) }
         }
     }
 
-    /** 删除账单：把金额还回账户 */
+    /**
+     * 删除账单：把金额还回账户，并做**软删除**（保留 deleted 标记以便同步给另一端）。
+     * UI 侧所有查询都已过滤 deleted，用户看到的效果就是“删掉了”。
+     */
     suspend fun delete(id: Long) {
         db.withTransaction {
             val old = transactionDao.getById(id) ?: return@withTransaction
-            old.accountId?.let { accountDao.adjustBalance(it, -signedDelta(old.amountCents, old.type)) }
-            transactionDao.deleteById(id)
+            if (old.deleted) return@withTransaction
+            old.accountId?.let { accountDao.adjustBalance(it, -signedDelta(old.amountCents, old.type), System.currentTimeMillis()) }
+            transactionDao.markDeleted(id, System.currentTimeMillis())
         }
     }
 

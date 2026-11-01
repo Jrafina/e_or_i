@@ -5,11 +5,17 @@ import androidx.lifecycle.viewModelScope
 import com.ddl.eori.data.local.AccountEntity
 import com.ddl.eori.data.local.AccountType
 import com.ddl.eori.data.local.AccountWithCount
+import com.ddl.eori.data.local.PeriodTotals
+import com.ddl.eori.data.local.TransactionEntity
 import com.ddl.eori.data.repo.AccountRepository
+import com.ddl.eori.data.repo.TransactionRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -24,6 +30,13 @@ data class AccountEditor(
     val canSave: Boolean get() = name.isNotBlank()
 }
 
+/** 账户详情：某个账户下的全部账单（首页仍然展示全部账单，互不影响） */
+data class AccountDetail(
+    val account: AccountWithCount,
+    val transactions: List<TransactionEntity>,
+    val totals: PeriodTotals,
+)
+
 data class AccountsUiState(
     val accounts: List<AccountWithCount> = emptyList(),
     /** 总余额 = 所有账户余额之和（未填写余额的账户按 0 计） */
@@ -31,30 +44,74 @@ data class AccountsUiState(
     val editor: AccountEditor? = null,
     val pendingDelete: AccountWithCount? = null,
     val message: String? = null,
+    /** 非空时展示账户详情页（账户下钻） */
+    val detail: AccountDetail? = null,
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AccountsViewModel(
     private val accountRepo: AccountRepository,
+    private val txRepo: TransactionRepository,
 ) : ViewModel() {
 
     private val _editor = MutableStateFlow<AccountEditor?>(null)
     private val _pendingDelete = MutableStateFlow<AccountWithCount?>(null)
     private val _message = MutableStateFlow<String?>(null)
 
+    /** 当前下钻查看的账户 id；null 表示在账户列表页 */
+    private val _detailAccountId = MutableStateFlow<Long?>(null)
+
+    private val detailState = _detailAccountId.flatMapLatest { id ->
+        if (id == null) {
+            flowOf(null)
+        } else {
+            combine(
+                accountRepo.observeAccountsWithCount(),
+                txRepo.observeByAccount(id),
+                txRepo.observeTotalsByAccount(id),
+            ) { accounts, txs, totals ->
+                val account = accounts.firstOrNull { it.id == id }
+                // 账户在下钻期间被删除 -> 自动退回列表
+                if (account == null) null else AccountDetail(account, txs, totals)
+            }
+        }
+    }
+
     val uiState: StateFlow<AccountsUiState> = combine(
         accountRepo.observeAccountsWithCount(),
         _editor,
         _pendingDelete,
         _message,
-    ) { accounts, editor, pendingDelete, message ->
+        detailState,
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        val accounts = values[0] as List<AccountWithCount>
         AccountsUiState(
             accounts = accounts,
             totalBalanceCents = accounts.sumOf { it.balanceCents ?: 0L },
-            editor = editor,
-            pendingDelete = pendingDelete,
-            message = message,
+            editor = values[1] as AccountEditor?,
+            pendingDelete = values[2] as AccountWithCount?,
+            message = values[3] as String?,
+            detail = values[4] as AccountDetail?,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AccountsUiState())
+
+    /** 点击账户卡片 -> 查看该账户账单 */
+    fun openDetail(id: Long) {
+        _detailAccountId.value = id
+    }
+
+    fun closeDetail() {
+        _detailAccountId.value = null
+    }
+
+    fun deleteTransaction(id: Long) {
+        viewModelScope.launch {
+            runCatching { txRepo.delete(id) }
+                .onSuccess { _message.value = "已删除" }
+                .onFailure { _message.value = "删除失败" }
+        }
+    }
 
     fun startCreate() {
         _editor.value = AccountEditor(isNew = true)

@@ -1,0 +1,14 @@
+name = "eori-sync"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# D1 数据库绑定：创建数据库后把 database_id 填到这里
+#   wrangler d1 create eori-db
+[[d1_databases]]
+binding = "DB"
+database_name = "eori-db"
+database_id = "d1数据库的id"
+
+# 同步密钥不写在这里，用 secret 设置：
+#   wrangler secret put SYNC_TOKEN
+# 要求至少 16 位，建议 32 位以上随机字符串。

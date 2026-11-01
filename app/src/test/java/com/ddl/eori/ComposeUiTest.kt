@@ -110,6 +110,9 @@ class ScreenRenderTest {
                 AccountsScreen(
                     state = AccountsUiState(),
                     onCreate = {},
+                    onOpenAccount = {},
+                    onCloseDetail = {},
+                    onDeleteTransaction = {},
                     onEdit = {},
                     onRequestDelete = {},
                     onEditorChange = {},

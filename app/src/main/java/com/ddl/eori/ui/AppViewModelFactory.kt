@@ -33,11 +33,19 @@ object AppViewModelFactory {
             StatsViewModel(txRepo = container().transactionRepository)
         }
         initializer {
-            AccountsViewModel(accountRepo = container().accountRepository)
+            val c = container()
+            AccountsViewModel(
+                accountRepo = c.accountRepository,
+                txRepo = c.transactionRepository,
+            )
         }
         initializer {
             val c = container()
-            SettingsViewModel(settingsRepo = c.settingsRepository, aiClient = c.aiClient)
+            SettingsViewModel(
+                settingsRepo = c.settingsRepository,
+                aiClient = c.aiClient,
+                syncEngine = c.syncEngine,
+            )
         }
     }
 

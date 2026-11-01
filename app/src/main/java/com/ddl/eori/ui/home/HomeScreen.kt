@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -76,6 +77,9 @@ fun HomeScreen(
     onGoSettings: () -> Unit,
 ) {
     val focusRequester = remember { FocusRequester() }
+    // 列表状态提升到 Screen 级，保证跨重组/跨分支复用；也从后台返回时保留滚动位置
+    val listState = rememberLazyListState()
+    var hasSettledOnce by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     // 首帧自动聚焦并弹出键盘（延迟一帧，等 Compose 布局完成）
@@ -211,7 +215,21 @@ fun HomeScreen(
         if (state.recent.isEmpty()) {
             EmptyHint("还没有账单，先说一句试试")
         } else {
-            LazyColumn(Modifier.fillMaxSize()) {
+            // 新账单插入列表顶部时，自动滚回最上方。
+            // 同时监听「首条 id」和「列表长度」：
+            //   - 新增账单 -> 长度+1 且首条变化 -> 滚动
+            //   - 同步拉取/编辑导致首条变化 -> 滚动
+            // 使用 scrollToItem（立即）而非动画，避免用户快速记账时动画排队。
+            val newestKey = "${state.recent.size}-${state.recent.firstOrNull()?.id}"
+            LaunchedEffect(newestKey) {
+                // 列表挂载后的首次不需要滚动
+                if (hasSettledOnce) {
+                    listState.scrollToItem(0)
+                } else {
+                    hasSettledOnce = true
+                }
+            }
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 items(state.recent, key = { it.id }) { tx ->
                     TransactionRow(
                         tx = tx,

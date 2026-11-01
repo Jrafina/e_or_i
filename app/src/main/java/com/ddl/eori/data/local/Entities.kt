@@ -30,6 +30,10 @@ data class AccountEntity(
     /** 可选余额，单位：分。null 表示用户未填写 */
     val balanceCents: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
+    /** 跨设备稳定标识 */
+    val uid: String = "",
+    /** 最后修改时间，用于增量同步 */
+    val updatedAt: Long = System.currentTimeMillis(),
 )
 
 /**
@@ -38,6 +42,10 @@ data class AccountEntity(
  * - amountCents：金额统一以“分”为单位用 Long 存储，避免浮点误差。
  * - accountId 可为空（手动记账时用户可选择“不指定账户”）。
  * - accountName：保存账户名快照，账户被删除后仍能展示（显示为“已删除账户”由 UI 判断）。
+ * - uid：跨设备同步的稳定标识（本地自增 id 无法跨设备对齐）。
+ * - updatedAt：最后一次修改时间，增量同步以此判断“哪端更新”。
+ * - deleted：软删除标记。同步需要把“删除了”这件事传到另一端，
+ *   否则云端旧数据会在下次同步时把已删除的账单“复活”。UI 查询一律过滤 deleted = 0。
  */
 @Entity(
     tableName = "transactions",
@@ -57,6 +65,12 @@ data class TransactionEntity(
     /** 发生时间（epoch millis） */
     val occurredAt: Long,
     val createdAt: Long = System.currentTimeMillis(),
+    /** 跨设备稳定标识 */
+    val uid: String = "",
+    /** 最后修改时间（本地修改与云端合并都以此为准） */
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** 软删除：true 表示已删除，仅用于把删除同步到另一端 */
+    val deleted: Boolean = false,
 )
 
 /** 账户 + 其账单数量，用于账户列表展示 */

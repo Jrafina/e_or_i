@@ -24,6 +24,18 @@ data class AiConfig(
         get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
 }
 
+/** 同步配置与状态（本地持久化） */
+data class SyncPrefs(
+    val endpoint: String = "",
+    val token: String = "",
+    /** 最近一次成功同步的时间戳，null 表示从未同步 */
+    val lastSyncAt: Long? = null,
+    /** 最近一次同步的摘要（方向 + 条数） */
+    val lastSummary: String? = null,
+) {
+    val isReady: Boolean get() = endpoint.isNotBlank() && token.isNotBlank()
+}
+
 /** 界面偏好 */
 data class UiPrefs(
     val darkMode: Boolean = false,
@@ -44,6 +56,12 @@ class SettingsRepository(private val context: Context) {
         val MODEL = stringPreferencesKey("ai_model")
         val DARK_MODE = booleanPreferencesKey("dark_mode")
         val SEEN_HINT = booleanPreferencesKey("seen_splash_hint")
+
+        // 云同步
+        val SYNC_ENDPOINT = stringPreferencesKey("sync_endpoint")
+        val SYNC_TOKEN = stringPreferencesKey("sync_token")
+        val SYNC_LAST_AT = stringPreferencesKey("sync_last_at")
+        val SYNC_LAST_SUMMARY = stringPreferencesKey("sync_last_summary")
     }
 
     private val prefs: Flow<Preferences> = context.dataStore.data
@@ -54,6 +72,15 @@ class SettingsRepository(private val context: Context) {
             baseUrl = p[Keys.BASE_URL].orEmpty(),
             apiKey = p[Keys.API_KEY].orEmpty(),
             model = p[Keys.MODEL].orEmpty(),
+        )
+    }
+
+    val syncPrefs: Flow<SyncPrefs> = prefs.map { p ->
+        SyncPrefs(
+            endpoint = p[Keys.SYNC_ENDPOINT].orEmpty(),
+            token = p[Keys.SYNC_TOKEN].orEmpty(),
+            lastSyncAt = p[Keys.SYNC_LAST_AT]?.toLongOrNull(),
+            lastSummary = p[Keys.SYNC_LAST_SUMMARY],
         )
     }
 
@@ -69,6 +96,21 @@ class SettingsRepository(private val context: Context) {
             p[Keys.BASE_URL] = config.baseUrl
             p[Keys.API_KEY] = config.apiKey
             p[Keys.MODEL] = config.model
+        }
+    }
+
+    suspend fun saveSyncConfig(endpoint: String, token: String) {
+        context.dataStore.edit { p ->
+            p[Keys.SYNC_ENDPOINT] = endpoint.trim()
+            p[Keys.SYNC_TOKEN] = token.trim()
+        }
+    }
+
+    /** 记录一次成功同步的时间与摘要（设置页展示“最近同步时间”） */
+    suspend fun recordSync(at: Long, summary: String) {
+        context.dataStore.edit { p ->
+            p[Keys.SYNC_LAST_AT] = at.toString()
+            p[Keys.SYNC_LAST_SUMMARY] = summary
         }
     }
 

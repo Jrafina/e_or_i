@@ -8,6 +8,7 @@ import com.ddl.eori.data.local.TxType
 import com.ddl.eori.data.remote.AiClient
 import com.ddl.eori.data.remote.asParseError
 import com.ddl.eori.data.repo.AccountRepository
+import com.ddl.eori.domain.AccountMatcher
 import com.ddl.eori.data.repo.TransactionRepository
 import com.ddl.eori.data.settings.SettingsRepository
 import com.ddl.eori.util.Money
@@ -149,11 +150,14 @@ class HomeViewModel(
                 return@launch
             }
             _parseState.value = ParseUiState.Parsing
+            // 把用户真实账户名交给模型，避免“卡2”被识别成“银行卡”而落到卡1
+            val accountNames = runCatching { accountRepo.all().map { it.name } }.getOrDefault(emptyList())
             val result = aiClient.parseTransaction(
                 rawInput = text,
                 baseUrl = config.baseUrl,
                 apiKey = config.apiKey,
                 model = config.model,
+                accountNames = accountNames,
             )
             _parseState.value = ParseUiState.Idle
 
@@ -169,7 +173,11 @@ class HomeViewModel(
 
     /** 解析成功：直接落库（同时更新账户余额），失败则退回手动表单 */
     private suspend fun saveParsed(parsed: com.ddl.eori.data.remote.AiParseResult, rawInput: String) {
-        val account = accountRepo.findByTypeOrFirst(parsed.accountType)
+        val allAccounts = runCatching { accountRepo.all() }.getOrDefault(emptyList())
+        // 优先按 AI 给出的账户名在原话里精确匹配（卡1/卡2 不会串），
+        // 匹配不到再退回按类型挑一个；完全没有账户时留空
+        val account = AccountMatcher.match(allAccounts, parsed.accountHint, rawInput)
+            ?: if (allAccounts.size == 1) allAccounts.first() else accountRepo.findByTypeOrFirst(parsed.accountType)
         val note = parsed.note.ifBlank { rawInput.take(20) }
         runCatching {
             txRepo.add(
@@ -187,7 +195,12 @@ class HomeViewModel(
 
             val action = if (parsed.type == TxType.INCOME) "已记收入 " else "已记支出 "
             val accountLabel = account?.name ?: "其他"
-            val fallbackHint = if (account != null && account.type != parsed.accountType) {
+            // 只有确实没匹配到用户说的那个账户时才提示
+            val fallbackHint = if (account != null &&
+                parsed.accountHint.isNotBlank() &&
+                !account.name.equals(parsed.accountHint, ignoreCase = true) &&
+                account.type != parsed.accountType
+            ) {
                 "（未识别到「${parsed.accountHint}」，已记入 $accountLabel）"
             } else ""
             notify(

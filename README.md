@@ -34,7 +34,7 @@ git clone <your-repo-url> e-or-i && cd e-or-i
 ./gradlew :app:assembleRelease
 # 产物：app/build/outputs/apk/release/app-release.apk
 
-# 单元测试 + Robolectric 启动/UI 测试（共 38 个用例）
+# 单元测试 + Robolectric 启动/UI 测试（共 75 个用例）
 ./gradlew :app:testDebugUnitTest
 ```
 
@@ -54,7 +54,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 > `dist/` 与 `*.apk` 均已加入 `.gitignore`：**二进制不进仓库**，建议用 GitHub Releases 分发。
 > 两个包签名不同，切换安装需先卸载。
 > 本机构建 release 时关闭了 `lintVital`（`checkReleaseBuilds = false`），否则 2 核环境下打包会长时间阻塞。
-> SHA-256：debug `539bc531…3106aff2`，release `3f9a743d…9bfb6c482`。
+> SHA-256：debug `05bcbb57…84fee1050`，release `52498ac0…459adfecb8`。
 
 ### 签名与密钥
 
@@ -123,12 +123,14 @@ export ANDROID_USER_HOME=$PWD/.android-home   # debug.keystore 存放目录
 - 深色模式开关（默认跟随系统）。
 
 ### 统计
+- **本月消费 Top10**：按金额从大到小排名，前三名金银铜徽标 + 相对占比进度条。
 - 四个指标：**总支出 / 总收入 / 净支出（收入−支出）/ 月日均支出（净支出 ÷ 本月已过天数，天数 ≥ 1）**。
 - 按日收支双柱趋势图（纯 Canvas 绘制，未引入图表库），空数据全 0 不崩溃。
 - 可切换月份，禁止切到未来月份；切到非本月时按整月天数计算日均。
 
 ### 账户
 - 顶部**总余额**卡片：所有账户余额之和（未填写余额的账户按 0 计），负数标红。
+- **点击账户进入详情**：集中展示该账户的全部账单、当前余额、累计收入/支出。首页依旧展示全部账单，互不影响。
 - 增删改查：名称、类型（银行卡 / 支付宝 / 微信 / 现金 / 其他）、可选余额。
 - **余额随账单自动联动**：支出减少、收入增加；改金额/改账户先撤销旧影响再应用新值；删除账单把金额还回去。全部在同一个数据库事务内完成。
 - **删除账户不级联删除账单**：历史账单保留，账户列显示为「已删除账户」，删除前会提示影响笔数。
@@ -140,9 +142,27 @@ export ANDROID_USER_HOME=$PWD/.android-home   # debug.keystore 存放目录
 > Snackbar「撤销」，且账单本身仍可在首页点开编辑。
 - `POST {baseUrl}/chat/completions`，`temperature=0.1`，要求模型输出严格 JSON：
   `{amount, type, account, note, occurredAt}`
+- **真实账户名会写入提示词**：模型必须从「卡1 / 卡2 / 支付宝…」中选一个；
+  本地再加一层 `AccountMatcher`（精确名 → 数字区分 → 银行简称 → 类型兜底），
+  确保「卡2消费2元」不会记到卡1。
 - 提示词显式注入**当前时间、星期、时区**，并给出金额提取、收支判断、账户识别、相对时间（今天/昨天/前天/早上/晚上）的具体规则。
 - 结果校验：金额 > 0、类型合法、账户归一到 5 类（无法识别归「其他」）、时间非法回落当前时间、未来时间纠正。
 - 解析容错：支持 ```json 代码块、前后夹带解释文字、字段名大小写/下划线差异、`account` 为对象等常见模型输出瑕疵。
+
+### 云同步（Cloudflare D1，手动触发）
+- 设置页填写 **Worker 地址 + 同步密钥**，点「测试连接」只读探测，点「立即同步」执行。
+- **按两端最后时间戳决定方向**：云端新→下载，本地新→上传，相差 <1 秒→已是最新。
+- **只传增量**：1000 条里改了 3 条就只传 3 条；每批 200 条分页；判断方向只发一个 `meta` 请求。
+- **删除同步**：删除为软删除（`deleted` 标记），传到另一端后一起消失，不会「复活」。
+- **显示最近同步时间**与上下次同步摘要（拉取/上传 + 条数）。
+- **安全**：强制 https、Bearer 密钥鉴权（恒定时间比较）、按 IP 限流；密钥只存本地与 Cloudflare Secret。
+- **金额单位**：D1 中 `accounts.balance` 与 `transactions.amount` 均以**元**存储、两位小数；
+  App 内部仍用「分」，仅在传输边界用 BigDecimal 精确换算。
+- **换机/重装恢复**：用「是否有真实数据（有余额或账单）」判断，启动预置的空壳账户不算数据，
+  因此重装后同步必定拉取云端全量。
+- **协议版本**：App 与 Worker 都带 `PROTOCOL_VERSION=2`，版本不匹配直接报 409，
+  避免新旧混用把 50 元二次换算成 0.5 元。
+- 部署步骤见 [`server/README.md`](server/README.md)，Worker 源码在 `server/worker.js`。
 
 ---
 
@@ -189,9 +209,18 @@ app/src/main/java/com/ddl/eori/
 
 ```kotlin
 Transaction: id, amountCents(Long), type(EXPENSE/INCOME), accountId?, accountName?,
-             note, rawInput, occurredAt, createdAt
-Account:     id, name, type(BANK/ALIPAY/WECHAT/CASH/OTHER), balanceCents?, createdAt
-设置(DataStore): ai_base_url, ai_api_key, ai_model, dark_mode
+             note, rawInput, occurredAt, createdAt,
+             uid(跨设备标识), updatedAt(增量同步依据), deleted(软删除)
+Account:     id, name, type(BANK/ALIPAY/WECHAT/CASH/OTHER), balanceCents?, createdAt,
+             uid, updatedAt
+设置(DataStore): ai_base_url, ai_api_key, ai_model, dark_mode,
+                sync_endpoint, sync_token, sync_last_at, sync_last_summary
+```
+
+数据库版本 **v2**，附带 `MIGRATION_1_2`：老用户升级时自动补齐 `uid` / `updatedAt` / `deleted`，
+数据零丢失（有专门的迁移测试覆盖）。
+
+```text
 ```
 
 ### 线程与稳定性
@@ -222,7 +251,7 @@ Account:     id, name, type(BANK/ALIPAY/WECHAT/CASH/OTHER), balanceCents?, creat
 ./gradlew :app:testDebugUnitTest
 ```
 
-覆盖（38 个用例，其中 18 个为 Robolectric/Compose 真机级测试）：
+覆盖（75 个用例）：
 
 - `MoneyTest`：金额解析（符号/单位/千分位/非法值）、两位小数进位、正负号展示。
 - `ApiUrlsTest`：Base URL 归一化、`/v1` 自动补全、不重复拼接、缺协议补 https、空值。
@@ -235,6 +264,27 @@ Account:     id, name, type(BANK/ALIPAY/WECHAT/CASH/OTHER), balanceCents?, creat
 - `QuickEntryTest`（Robolectric + 伪造 HTTP，3 例）：**解析成功直接入账且余额同步**、撤销后账单与余额一并还原、解析失败降级手动表单且输入不丢、空输入不发起请求。
 - `AppLaunchTest` 中的账本用例（2 例）：支出/收入/改金额/删除账单后余额逐步核对；编辑账单换账户时两个账户余额同时正确。
 
+- `AccountMatcherTest`（10 例）：卡1/卡2 精确匹配、中文数字「卡二」、卡1 vs 卡12、
+  模型返回泛称「银行卡」时按原话纠正、歧义时不乱猜、招行/建行简称匹配。
+- `SyncConfigTest`（5 例）：https 才允许同步、localhost 调试例外、地址归一化。
+- `SyncBalanceFormatTest`（7 例）：分↔元换算（两位小数、往返一致）、账户 `balance` 与账单 `amount` 字段名与单位。
+- `AccountBalanceSyncTest`（4 例）：**记账/删除都会刷新 updatedAt**（否则余额永远不上传）、余额不再是 null、余额等于账单净额。
+- `SwitchDeviceSyncTest`（9 例）：**重装 App 后能拉回云端数据**（不被预置空账户误导）、50 元账单在云端仍是 50、
+  多档金额不丢精度、换机拉全、首次上传、默认账户合并、分页游标、两端都有数据时按时间戳判断。
+
+### 换新手机的恢复流程
+
+| 步骤 | 操作 | 预期 |
+| --- | --- | --- |
+| 1 | 旧手机：设置 → 云同步 → 立即同步 | 「已上传到云端」 |
+| 2 | 新手机：装 App（不用先记账）→ 填同一地址+密钥 → 立即同步 | 「已从云端拉取」 |
+| 3 | 检查账单列表与账户余额 | 数据完整、账户关联正确 |
+
+判断规则：**本地空 + 云端有数据 → 强制拉取**；本地有 + 云端空 → 强制上传；
+两端都有 → 对比 `MAX(updatedAt)` 取较新一端。详见 [`server/README.md`](server/README.md)。
+- `MigrationTest`（1 例）：v1 → v2 迁移后老数据完整、uid 补齐、deleted 默认 0。
+- `QuickEntryTest.secondCardIsCreditedNotFirstCard`：端到端验证「卡2消费2元」余额只扣卡2。
+
 > 说明：release 变体（R8 混淆后）的 Robolectric 全量测试在本机 1.6GB 内存下会超时，
 > 因此改为静态验证：`mapping.txt` 与 dex 包列表确认 `EoriDatabase_Impl`、`AccountDao_Impl`、
 > `MainActivity` 等关键类均被正确保留，APK 签名与清单校验通过。
@@ -245,15 +295,17 @@ Account:     id, name, type(BANK/ALIPAY/WECHAT/CASH/OTHER), balanceCents?, creat
 
 1. **未接入真实 AI 服务做端到端联调**：构建环境无可用 API Key，解析链路的网络部分以单元测试 + 错误分类覆盖，实际效果取决于所选模型质量（建议 `gpt-4o-mini`、`deepseek-chat`、`qwen-plus` 等指令跟随较好的模型）。
 2. **未在真机/模拟器上运行**：本机构建环境无 KVM，无法启动 Android 模拟器。已用 **Robolectric 在 JVM 上真实启动 Activity 并渲染 Compose 首屏**（33 项测试全绿），并验证 APK 签名/清单/权限正确；但触摸手感、键盘弹出时序、真机字体缩放等仍需安装后目测。
-3. **账户余额以「0」为起点累加**：如果建账户时没填余额，第一次记账会从 0 开始算（可能显示负数）。想让余额准确，请在「账户」里填一次当前余额，之后自动增减。
-4. **撤销只针对最近一笔自动入账**：Snackbar 消失后仍可在账单列表里删除或编辑。
-5. **无跨设备同步/备份**：`allowBackup=false`，数据仅存本机 Room，卸载即丢失。
-6. **无多币种**：金额统一按人民币「元」处理，不识别美元/欧元等。
-7. **不支持转账、分期、多笔合并解析**：一句话只解析出一笔账单。
-8. **`response_format: json_object` 为可选字段**：部分非标准服务可能忽略或报错，若遇到可改为纯提示词约束（提示词已要求只输出 JSON）。
-9. **统计仅支持按月切换**，无年度/自定义区间；趋势图为按日，未做按类别占比。
-10. **明暗主题**：仅「跟随系统 + 手动深色」二态，未提供跟随系统/浅色/深色三态。
-11. **API Key 以明文存于 DataStore**（沙箱内，非系统级加密）；如需更强保护可接入 `EncryptedSharedPreferences` 或 Keystore 加密，本次未引入以保持依赖精简。
+3. **云同步为单用户设计**：一套 Worker + D1 只服务一个人（靠密钥隔离），不支持多人共用一个后端。
+4. **同步不做自动触发**：按需求为纯手动，换设备后需手动点一次。
+5. **账户余额以「0」为起点累加**：如果建账户时没填余额，第一次记账会从 0 开始算（可能显示负数）。想让余额准确，请在「账户」里填一次当前余额，之后自动增减。
+6. **撤销只针对最近一笔自动入账**：Snackbar 消失后仍可在账单列表里删除或编辑。
+7. **本地无自动备份**：`allowBackup=false`，卸载即丢失；建议定期手动同步到云端。
+8. **无多币种**：金额统一按人民币「元」处理，不识别美元/欧元等。
+9. **不支持转账、分期、多笔合并解析**：一句话只解析出一笔账单。
+10. **`response_format: json_object` 为可选字段**：部分非标准服务可能忽略或报错，若遇到可改为纯提示词约束（提示词已要求只输出 JSON）。
+11. **统计仅支持按月切换**，无年度/自定义区间；趋势图为按日，未做按类别占比。
+12. **明暗主题**：仅「跟随系统 + 手动深色」二态，未提供跟随系统/浅色/深色三态。
+13. **API Key / 同步密钥以明文存于 DataStore**（沙箱内，非系统级加密）；如需更强保护可接入 `EncryptedSharedPreferences` 或 Keystore 加密，本次未引入以保持依赖精简。
 
 ---
 

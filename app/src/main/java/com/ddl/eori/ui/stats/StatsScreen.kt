@@ -40,6 +40,9 @@ import com.ddl.eori.ui.components.MetricCard
 import com.ddl.eori.ui.theme.AmountColors
 import com.ddl.eori.util.Dates
 import com.ddl.eori.util.Money
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 /**
  * 统计页：四个指标卡片 + 本月按日收支趋势图。
@@ -175,7 +178,104 @@ fun StatsScreen(
                 }
             }
         }
+        Spacer(Modifier.height(16.dp))
+
+        // 本月消费 Top10
+        TopExpensesCard(points = state.topExpenses, expenseColor = expenseColor)
+
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * 本月消费 Top10：按金额从大到小排列，带排名、占比条、账户与日期。
+ */
+@Composable
+private fun TopExpensesCard(
+    points: List<com.ddl.eori.data.local.TransactionEntity>,
+    expenseColor: Color,
+) {
+    if (points.isEmpty()) return
+    val max = points.maxOf { it.amountCents }.coerceAtLeast(1L)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text("本月消费 Top10", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+
+            points.forEachIndexed { index, tx ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 排名徽标
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .background(
+                                when (index) {
+                                    0 -> Color(0xFFF5B301)
+                                    1 -> Color(0xFFB0B7C3)
+                                    2 -> Color(0xFFCD7F32)
+                                    else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                                },
+                                CircleShape,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "${index + 1}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (index < 3) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = tx.note.ifBlank { "支出" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "${Dates.formatDateTime(tx.occurredAt)}" +
+                                (tx.accountName?.let { " · $it" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        // 相对最大值的占比条
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(3.dp),
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(tx.amountCents.toFloat() / max)
+                                    .height(3.dp)
+                                    .background(expenseColor.copy(alpha = 0.55f), RoundedCornerShape(2.dp)),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = Money.format(tx.amountCents),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = expenseColor,
+                    )
+                }
+            }
+        }
     }
 }
 

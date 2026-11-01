@@ -1,6 +1,7 @@
 package com.ddl.eori.ui.accounts
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
@@ -43,6 +45,8 @@ import com.ddl.eori.data.local.AccountType
 import com.ddl.eori.data.local.AccountWithCount
 import com.ddl.eori.domain.label
 import com.ddl.eori.ui.components.EmptyHint
+import com.ddl.eori.ui.components.SectionHeader
+import com.ddl.eori.ui.components.TransactionRow
 import com.ddl.eori.ui.components.accountColor
 import com.ddl.eori.util.Money
 
@@ -50,6 +54,9 @@ import com.ddl.eori.util.Money
 fun AccountsScreen(
     state: AccountsUiState,
     onCreate: () -> Unit,
+    onOpenAccount: (Long) -> Unit,
+    onCloseDetail: () -> Unit,
+    onDeleteTransaction: (Long) -> Unit,
     onEdit: (AccountWithCount) -> Unit,
     onRequestDelete: (AccountWithCount) -> Unit,
     onEditorChange: ((AccountEditor) -> AccountEditor) -> Unit,
@@ -58,6 +65,17 @@ fun AccountsScreen(
     onDeleteConfirm: () -> Unit,
     onDeleteCancel: () -> Unit,
 ) {
+    // 下钻：某个账户的专属账单列表
+    val detail = state.detail
+    if (detail != null) {
+        AccountDetailScreen(
+            detail = detail,
+            onBack = onCloseDetail,
+            onDeleteTransaction = onDeleteTransaction,
+        )
+        return
+    }
+
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(onClick = onCreate) {
@@ -95,6 +113,7 @@ fun AccountsScreen(
                     items(state.accounts, key = { it.id }) { account ->
                         AccountRow(
                             account = account,
+                            onOpen = { onOpenAccount(account.id) },
                             onEdit = { onEdit(account) },
                             onDelete = { onRequestDelete(account) },
                         )
@@ -174,13 +193,15 @@ private fun TotalBalanceCard(totalCents: Long, accountCount: Int) {
 @Composable
 private fun AccountRow(
     account: AccountWithCount,
+    onOpen: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clickable(onClick = onOpen),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
@@ -288,4 +309,101 @@ private fun AccountEditorDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         },
     )
+}
+
+/**
+ * 账户详情：集中展示某个账户下的账单。
+ * 首页仍然展示全部账单，两者互不影响。
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun AccountDetailScreen(
+    detail: AccountDetail,
+    onBack: () -> Unit,
+    onDeleteTransaction: (Long) -> Unit,
+) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { Text(detail.account.name) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
+            )
+        },
+    ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            // 账户汇总
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = accountColor(detail.account.type).copy(alpha = 0.10f),
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("当前余额", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = detail.account.balanceCents?.let { Money.format(it) } ?: "未设置",
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("累计支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = Money.format(detail.totals.expenseCents),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("累计收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = Money.format(detail.totals.incomeCents),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+
+            SectionHeader(text = "账单明细（${detail.transactions.size} 笔）")
+
+            if (detail.transactions.isEmpty()) {
+                EmptyHint("这个账户还没有账单")
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(detail.transactions, key = { it.id }) { tx ->
+                        TransactionRow(
+                            tx = tx,
+                            knownAccountIds = setOf(detail.account.id),
+                            onEdit = {},
+                            onDelete = { onDeleteTransaction(tx.id) },
+                        )
+                    }
+                    item { Spacer(Modifier.height(24.dp)) }
+                }
+            }
+        }
+    }
 }

@@ -43,6 +43,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.ddl.eori.util.Dates
 import com.ddl.eori.ui.components.AppIcons
 
 /**
@@ -60,6 +61,11 @@ fun SettingsScreen(
     onVerify: () -> Unit,
     onSave: () -> Unit,
     onDarkModeChange: (Boolean) -> Unit,
+    onSyncEndpointChange: (String) -> Unit,
+    onSyncTokenChange: (String) -> Unit,
+    onToggleSyncTokenVisible: () -> Unit,
+    onSyncTest: () -> Unit,
+    onSyncNow: () -> Unit,
 ) {
     Column(
         Modifier
@@ -194,6 +200,105 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(12.dp))
+
+        // ------------------------------------------------------------ 云同步
+        Text("云同步", style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = "手动同步到 Cloudflare D1。按两端最后更新时间决定方向，只传增量。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "最近同步：${state.lastSyncAt?.let { Dates.formatDateTime(it) } ?: "从未同步"}",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (state.lastSyncAt != null) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (state.lastSyncSummary != null) {
+            Text(
+                text = state.lastSyncSummary,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = state.syncEndpoint,
+            onValueChange = onSyncEndpointChange,
+            label = { Text("同步地址（Worker URL）") },
+            placeholder = { Text("https://eori-sync.xxx.workers.dev") },
+            singleLine = true,
+            isError = !state.syncSecure,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            supportingText = {
+                Text(
+                    text = if (state.syncSecure) "必须是 https:// 地址" else "明文 http 会泄露账单，请改用 https",
+                    color = if (state.syncSecure) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error,
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(10.dp))
+
+        OutlinedTextField(
+            value = state.syncToken,
+            onValueChange = onSyncTokenChange,
+            label = { Text("同步密钥（SYNC_TOKEN）") },
+            placeholder = { Text("部署 Worker 时设置的密钥") },
+            singleLine = true,
+            visualTransformation = if (state.syncTokenVisible) VisualTransformation.None
+            else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            trailingIcon = {
+                IconButton(onClick = onToggleSyncTokenVisible) {
+                    Icon(
+                        imageVector = if (state.syncTokenVisible) AppIcons.VisibilityOff else AppIcons.Visibility,
+                        contentDescription = if (state.syncTokenVisible) "隐藏" else "显示",
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = onSyncTest,
+                enabled = !state.syncRunning,
+                modifier = Modifier.weight(1f),
+            ) { Text("测试连接") }
+            Button(
+                onClick = onSyncNow,
+                enabled = !state.syncRunning && state.syncEndpoint.isNotBlank() && state.syncToken.isNotBlank(),
+                modifier = Modifier.weight(1f),
+            ) {
+                if (state.syncRunning) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(if (state.syncRunning) "同步中…" else "立即同步")
+            }
+        }
+
+        if (state.syncError != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = state.syncError,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
 
         Spacer(Modifier.height(20.dp))

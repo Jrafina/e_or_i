@@ -31,4 +31,11 @@ class AppContainer(context: Context) {
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(appContext) }
 
     val aiClient: AiClient by lazy { AiClient() }
+
+    /** 云同步：D1(经 Worker) 增量同步 */
+    private val syncApi: com.ddl.eori.data.sync.SyncApi by lazy { com.ddl.eori.data.sync.SyncApi() }
+
+    val syncEngine: com.ddl.eori.data.sync.SyncEngine by lazy {
+        com.ddl.eori.data.sync.SyncEngine(database, syncApi)
+    }
 }

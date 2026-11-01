@@ -6,6 +6,9 @@ import com.ddl.eori.data.local.AccountType
 import com.ddl.eori.data.local.TransactionEntity
 import com.ddl.eori.data.local.TxType
 import com.ddl.eori.data.remote.AiClient
+import com.ddl.eori.data.local.EoriDatabase
+import com.ddl.eori.data.repo.AccountRepository
+import com.ddl.eori.data.repo.TransactionRepository
 import com.ddl.eori.data.settings.AiConfig
 import com.ddl.eori.ui.home.HomeViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -157,6 +160,58 @@ class QuickEntryTest {
         assertEquals(balanceBefore, alipayBalance())
 
         job.cancel()
+    }
+
+    /**
+     * 回归测试：用户有两张卡时，说「卡2消费2元」必须记到卡2，而不是卡1。
+     *
+     * 使用独立的内存数据库，避免与其他用例共享数据库造成的顺序依赖。
+     */
+    @Test
+    fun secondCardIsCreditedNotFirstCard() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val memDb = androidx.room.Room.inMemoryDatabaseBuilder(context, EoriDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val accountRepo = AccountRepository(memDb.accountDao(), memDb.transactionDao())
+            val txRepo = TransactionRepository(memDb)
+            accountRepo.create("卡1", AccountType.BANK, 100_000L)
+            accountRepo.create("卡2", AccountType.BANK, 100_000L)
+
+            val settingsRepo = app().container.settingsRepository
+            settingsRepo.saveAiConfig(
+                AiConfig(baseUrl = "https://example.com/v1", apiKey = "sk-test", model = "test-model")
+            )
+
+            // 故意让模型返回模糊的“银行卡”，验证本地兜底能根据原话纠正到卡2
+            val modelOutput = """{"amount":2,"type":"expense","account":"银行卡","note":"消费","occurredAt":"2026-10-30T12:00:00"}"""
+            val vm = HomeViewModel(
+                txRepo = txRepo,
+                accountRepo = accountRepo,
+                settingsRepo = settingsRepo,
+                aiClient = fakeClient(200, modelOutput),
+            )
+            val scope = CoroutineScope(Dispatchers.Unconfined)
+            val job = scope.launch { vm.uiState.collect {} }
+
+            vm.onInputChange("卡2消费2元")
+            vm.submit()
+
+            assertTrue("应新增一笔账单", awaitUntil { txRepo.observeRecent(10).first().isNotEmpty() })
+            val latest = txRepo.observeRecent(10).first().first()
+            assertEquals("卡2", latest.accountName)
+            assertEquals(200L, latest.amountCents)
+
+            val card2 = accountRepo.all().first { it.name == "卡2" }
+            val card1 = accountRepo.all().first { it.name == "卡1" }
+            assertEquals("卡2 余额应减少 2 元", 99_800L, card2.balanceCents)
+            assertEquals("卡1 余额不应变化", 100_000L, card1.balanceCents)
+
+            job.cancel()
+        } finally {
+            memDb.close()
+        }
     }
 
     @Test
